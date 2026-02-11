@@ -1,0 +1,134 @@
+{
+  "use_default": {
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "description": "使用默认周推送配置的群号"
+  },
+  "settings": {
+    "type": "object",
+    "description": "每周配置",
+    "items": {
+      "星期一": {
+        "type": "object",
+        "description": "星期一",
+        "items": {
+          "time": {
+            "type": "string",
+            "description": "推送时间"
+          },
+          "domains": {
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "description": "领域"
+          }
+        }
+      },
+      "星期二": {
+        "type": "object",
+        "description": "星期二",
+        "items": {
+          "time": {
+            "type": "string",
+            "description": "推送时间"
+          },
+          "domains": {
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "description": "领域"
+          }
+        }
+      },
+      "星期三": {
+        "type": "object",
+        "description": "星期三",
+        "items": {
+          "time": {
+            "type": "string",
+            "description": "推送时间"
+          },
+          "domains": {
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "description": "领域"
+          }
+        }
+      },
+      "星期四": {
+        "type": "object",
+        "description": "星期四",
+        "items": {
+          "time": {
+            "type": "string",
+            "description": "推送时间"
+          },
+          "domains": {
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "description": "领域"
+          }
+        }
+      },
+      "星期五": {
+        "type": "object",
+        "description": "星期五",
+        "items": {
+          "time": {
+            "type": "string",
+            "description": "推送时间"
+          },
+          "domains": {
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "description": "领域"
+          }
+        }
+      },
+      "星期六": {
+        "type": "object",
+        "description": "星期六",
+        "items": {
+          "time": {
+            "type": "string",
+            "description": "推送时间"
+          },
+          "domains": {
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "description": "领域"
+          }
+        }
+      },
+      "星期日": {
+        "type": "object",
+        "description": "星期日",
+        "items": {
+          "time": {
+            "type": "string",
+            "description": "推送时间"
+          },
+          "domains": {
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "description": "领域"
+          }
+        }
+      }
+    }
+  }
+}

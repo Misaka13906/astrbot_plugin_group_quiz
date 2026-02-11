@@ -1,3 +1,7 @@
+# project ignore
+ignore/
+quiz.db
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
