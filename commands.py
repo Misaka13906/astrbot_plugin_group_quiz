@@ -24,6 +24,7 @@ class CommandHandlers:
         """
         self.context = context
         self.db = db
+
         self.config = config  # 保存插件配置
 
     async def cmd_help(self, event: AstrMessageEvent):

@@ -205,7 +205,7 @@ class QuizScheduler:
 
             # 使用统一消息来源发送
             # 格式：platform_id:message_type:session_id
-            # 从 context.platform_manager 获取可用的平台
+            # 尝试通过所有可用平台发送消息
             if (
                 not hasattr(self.context, "platform_manager")
                 or not self.context.platform_manager.platform_insts
@@ -213,16 +213,30 @@ class QuizScheduler:
                 logger.error("No platform available to send message")
                 return
 
-            # 使用第一个可用平台发送消息
-            platform = self.context.platform_manager.platform_insts[0]
-            platform_id = platform.meta().id
+            sent_success = False
+            for platform in self.context.platform_manager.platform_insts:
+                try:
+                    platform_id = platform.meta().id
+                    # 构建正确的 unified_msg_origin
+                    # 格式：platform_id:MessageType:session_id
+                    unified_msg_origin = f"{platform_id}:GroupMessage:{group_qq}"
 
-            # 构建正确的 unified_msg_origin
-            # 格式：platform_id:MessageType:session_id
-            unified_msg_origin = f"{platform_id}:GroupMessage:{group_qq}"
+                    await self.context.send_message(unified_msg_origin, result)
+                    logger.info(
+                        f"Pushed {len(problems)} problems to group {group_qq} via {platform_id}"
+                    )
+                    sent_success = True
+                    break  # 假设一个群只属于一个平台，发送成功即停止
+                except Exception as e:
+                    # 仅记录调试信息，尝试下一个平台
+                    logger.debug(
+                        f"Failed to send to group {group_qq} via {platform_id}: {e}"
+                    )
 
-            await self.context.send_message(unified_msg_origin, result)
-            logger.info(f"Pushed {len(problems)} problems to group {group_qq}")
+            if not sent_success:
+                logger.error(
+                    f"Failed to push message to group {group_qq}. Use 'debug' level log to see details."
+                )
 
             # 推送成功后更新游标到下一批次
             if next_cursor > 0:  # 只有在使用批次系统时才更新

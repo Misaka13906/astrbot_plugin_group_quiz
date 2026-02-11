@@ -35,7 +35,6 @@ class QuizDatabase:
     def initialize_schema(self, schema_sql_path: str):
         """
         初始化数据库表结构
-        将 MySQL 语法转换为 SQLite 语法
 
         Args:
             schema_sql_path: schema.sql 文件路径
@@ -48,9 +47,6 @@ class QuizDatabase:
             with open(schema_sql_path, encoding="utf-8") as f:
                 schema_sql = f.read()
 
-            # 转换 MySQL 语法到 SQLite
-            schema_sql = self._convert_mysql_to_sqlite(schema_sql)
-
             cursor = self.conn.cursor()
             # 执行所有 SQL 语句
             cursor.executescript(schema_sql)
@@ -60,36 +56,6 @@ class QuizDatabase:
         except Exception as e:
             logger.error(f"Failed to initialize schema: {e}")
             return False
-
-    def _convert_mysql_to_sqlite(self, sql: str) -> str:
-        """
-        将 MySQL SQL 转换为 SQLite 兼容语法
-
-        Args:
-            sql: MySQL SQL 语句
-
-        Returns:
-            转换后的 SQLite SQL 语句
-        """
-        # 替换 auto_increment 为 AUTOINCREMENT
-        sql = sql.replace("auto_increment", "AUTOINCREMENT")
-
-        # 移除 MySQL 特有的 index 关键字 (如 category varchar(255) index)
-        # SQLite 会自动为 PRIMARY KEY 创建索引
-        import re
-
-        sql = re.sub(r"\s+index(?=\s*[,)])", "", sql, flags=re.IGNORECASE)
-
-        # 替换 enum 类型为 TEXT (SQLite 不支持 enum)
-        sql = re.sub(r"enum\([^)]+\)", "TEXT", sql, flags=re.IGNORECASE)
-
-        # 移除 COMMENT 语句 (SQLite 不支持行内 comment)
-        sql = re.sub(r'\s+comment\s+[\'"][^\'"]*[\'"]', "", sql, flags=re.IGNORECASE)
-
-        # 替换反引号为双引号或直接移除
-        sql = sql.replace("`", '"')
-
-        return sql
 
     # ==================== Groups 相关操作 ====================
 

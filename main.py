@@ -8,12 +8,21 @@ import traceback
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from .commands import CommandHandlers
 from .database import QuizDatabase
 from .scheduler import QuizScheduler
+
+
+class DummyConfig(dict):
+    """
+    当插件配置为空时使用的占位符配置
+    """
+
+    def save_config(self):
+        logger.warning("Config is dummy, changes will not be saved.")
 
 
 @register("group_quiz", "Misaka13906", "群聊答题插件", "v1.0.0")
@@ -34,13 +43,17 @@ class GroupQuizPlugin(Star):
             # 检查 config 是否可用
             if self.config is None:
                 logger.warning(
-                    "Plugin config is None, some features may not work properly"
+                    "Plugin config is None! Using empty config with default behaviors."
                 )
+                self.config = DummyConfig()
 
             # 初始化数据库
+            # 使用 StarTools 获取标准数据目录
+            data_dir = StarTools.get_data_dir("astrbot_plugin_group_quiz")
+            if not os.path.exists(data_dir):
+                os.makedirs(data_dir)
+
             plugin_dir = os.path.dirname(__file__)
-            # 数据库存储在上上级的 data 目录下
-            data_dir = os.path.abspath(os.path.join(plugin_dir, "..", ".."))
             db_path = os.path.join(data_dir, "quiz.db")
             schema_path = os.path.join(plugin_dir, "sql", "schema.sql")
 
@@ -50,7 +63,7 @@ class GroupQuizPlugin(Star):
             # 检查数据库是否存在，不存在则初始化
             if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
                 logger.info(f"Database not found at {db_path}, initializing schema...")
-                self.db.initialize_schema(schema_path)
+                self.db.initialize_schema(schema_path)  # noqa: ASYNC240
                 logger.info(
                     "Database schema initialized. Please populate data manually using insert.sql"
                 )
