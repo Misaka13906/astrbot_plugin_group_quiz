@@ -12,7 +12,8 @@
 - 🔄 **智能循环**：题库推送完自动循环，持续学习
 
 ## 文档链接目录
-- [产品设计文档](docs/design-1.0.0.md)
+- [产品设计文档 - 1.0.0](docs/design-1.0.0.md)
+- [更新日志 - 1.0.1](docs/changelog-1.0.1.md)
 
 ---
 ## 📋 目录
@@ -42,7 +43,7 @@
 
 插件启动后，数据库位于：
 ```
-AstrBot/data/plugins/astrbot_plugin_group_quiz/quiz.db
+AstrBot/data/plugin_data/astrbot_plugin_group_quiz/quiz.db
 ```
 对于使用docker部署的，数据库位于插件的相应挂载目录中。
 
@@ -65,7 +66,7 @@ AstrBot/data/plugins/astrbot_plugin_group_quiz/quiz.db
 
 #### 步骤 3：自定义题目（推荐）
 
-编辑 `sql/example.sql` 或自己编写 SQL，导入你的题目：
+编辑 `sql/example.sql` 或自己编写其他脚本，导入你的题目：
 
 ```sql
 -- 添加题目
@@ -149,8 +150,9 @@ VALUES (1, 1, 10);  -- Java 领域第一批：题目 1-10
 | `/addme` | 小组名 | 加入指定小组 | `/addme Java` |
 | `/rmme` | 小组名 | 退出指定小组 | `/rmme Java` |
 | `/ans` | 题目ID | 查看题目答案 | `/ans 1` |
+| `/prob` | 题目ID | 查看题目内容 | `/prob 1` |
+| `/search` | 关键词 | 搜索题目 | `/search Java` |
 | `/rand` | 领域名 | 随机抽取一道题 | `/rand Java` |
-| `/debugconfig` | - | 查看插件配置（调试用） | `/debugconfig` |
 
 ### 管理员命令（仅群管理员可用）
 
@@ -162,6 +164,7 @@ VALUES (1, 1, 10);  -- Java 领域第一批：题目 1-10
 | `/task off all` | - | 关闭所有领域推送 | `/task off all` |
 | `/task on default` | - | 使用周推送默认配置 | `/task on default` |
 | `/task off default` | - | 使用手动配置模式 | `/task off default` |
+| `/pushnow` | 领域名 | 立即触发一次推送 | `/pushnow Java` |
 
 ---
 
@@ -277,11 +280,11 @@ IoC(控制反转)是Spring的核心概念，将对象的创建和依赖关系的
 
 ### 配置周推送默认计划
 
-插件配置**必须通过 AstrBot 的插件配置界面**进行，不要直接编辑配置文件。
+插件配置**必须通过 AstrBot 的插件配置界面**进行。
 
 1. 打开 AstrBot Web UI 管理后台
-2. 进入 **插件管理** → **群聊答题插件**
-3. 点击 **配置** 按钮
+2. 找到 **插件** → **每日技术问答**
+3. 点击 **插件配置** 按钮
 4. 在配置面板 UI 中配置使用默认周推送的群、每周推送计划
 
 > 💡 **提示**：
@@ -303,20 +306,6 @@ IoC(控制反转)是Spring的核心概念，将对象的创建和依赖关系的
 ```
 
 ### 常见配置问题
-
-#### ❓ 如何查看当前配置？
-
-在群聊中执行调试命令：
-```
-/debugconfig
-```
-
-会显示：
-- 当前群号
-- `use_default` 列表
-- `settings` 配置的键
-- 群号是否在列表中
-
 
 ### 批次配置（可选）
 

@@ -3,6 +3,9 @@
 负责管理定时推送任务
 """
 
+import sqlite3
+from datetime import datetime
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -54,11 +57,47 @@ class QuizScheduler:
         config = self.config  # 使用插件配置
         use_default_groups = config.get("use_default", [])
 
+        # ✅ 问题2修复：统一转换为字符串
+        use_default_groups = [str(g) for g in use_default_groups]
+
         # 加载周推送默认配置
         await self._load_weekly_tasks(use_default_groups)
 
         # 加载手动配置
         await self._load_manual_tasks(use_default_groups)
+
+    async def reload_tasks_for_group(self, group_qq: str):
+        """
+        ✅ 问题3修复：重新加载指定群的任务
+
+        Args:
+            group_qq: 群号
+        """
+        group_qq = str(group_qq)
+
+        # 1. 移除该群的所有任务
+        jobs = self.scheduler.get_jobs()
+        removed_count = 0
+        for job in jobs:
+            if group_qq in job.id:
+                self.scheduler.remove_job(job.id)
+                removed_count += 1
+
+        logger.info(f"Removed {removed_count} existing tasks for group {group_qq}")
+
+        # 2. 检查该群是否使用默认配置
+        use_default_groups = [str(g) for g in self.config.get("use_default", [])]
+
+        if group_qq in use_default_groups:
+            # 重新加载周配置任务
+            await self._load_weekly_tasks([group_qq])
+            logger.info(f"Reloaded weekly tasks for group {group_qq}")
+        else:
+            # 重新加载手动配置任务
+            # ✅ 修复：这里应该传真实的 use_default_groups，而不是 [group_qq]
+            # 否则 _load_manual_tasks 会把当前群当在这个列表里从而跳过加载
+            await self._load_manual_tasks(use_default_groups)
+            logger.info(f"Reloaded manual tasks for group {group_qq}")
 
     async def _load_weekly_tasks(self, use_default_groups: list[str]):
         """
@@ -88,11 +127,30 @@ class QuizScheduler:
                         logger.warning(f"Domain not found: {domain_name}")
                         continue
 
-                    hour, minute = push_time.split(":")
+                    # ✅ Bug 1 修复：确保 cursor 记录存在
+                    cursor_record = self.db.get_cursor_record(group_qq, domain["id"])
+                    if not cursor_record:
+                        self.db.init_cursor(group_qq, domain["id"], push_time)
+                        logger.info(
+                            f"Initialized cursor for weekly config: "
+                            f"group={group_qq}, domain={domain_name}"
+                        )
+
+                    # 解析并验证时间格式
+                    try:
+                        dt = datetime.strptime(push_time, "%H:%M")
+                        hour, minute = dt.hour, dt.minute
+                    except (ValueError, TypeError):
+                        logger.error(
+                            f"Invalid time format '{push_time}' for group {group_qq}, "
+                            f"domain {domain_name}, skipping task"
+                        )
+                        continue
+
                     trigger = CronTrigger(
                         day_of_week=self.WEEKDAY_MAP[day_name],
-                        hour=int(hour),
-                        minute=int(minute),
+                        hour=hour,
+                        minute=minute,
                     )
 
                     self.scheduler.add_job(
@@ -115,14 +173,14 @@ class QuizScheduler:
         Args:
             use_default_groups: 使用默认配置的群号列表（需跳过）
         """
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT gtc.group_qq, gtc.domain_id, gtc.push_time, d.name as domain_name
-            FROM group_task_config gtc
-            JOIN domain d ON gtc.domain_id = d.id
-            WHERE gtc.is_active = 1
-        """)
-        manual_configs = cursor.fetchall()
+        with self.db.get_locked_cursor() as cursor:
+            cursor.execute("""
+                SELECT gtc.group_qq, gtc.domain_id, gtc.push_time, d.name as domain_name
+                FROM group_task_config gtc
+                JOIN domain d ON gtc.domain_id = d.id
+                WHERE gtc.is_active = 1
+            """)
+            manual_configs = cursor.fetchall()
 
         for config in manual_configs:
             group_qq = config["group_qq"]
@@ -134,11 +192,18 @@ class QuizScheduler:
             if group_qq in use_default_groups:
                 continue
 
-            # 解析时间
+            # 解析并验证时间格式
             try:
-                hour, minute = push_time.split(":")
-                trigger = CronTrigger(hour=int(hour), minute=int(minute))
+                dt = datetime.strptime(push_time, "%H:%M")
+                trigger = CronTrigger(hour=dt.hour, minute=dt.minute)
+            except (ValueError, TypeError):
+                logger.error(
+                    f"Invalid time format '{push_time}' in database for "
+                    f"group {group_qq}, domain {domain_name}, skipping task"
+                )
+                continue
 
+            try:
                 self.scheduler.add_job(
                     self._push_callback,
                     trigger,
@@ -154,7 +219,8 @@ class QuizScheduler:
             except Exception as e:
                 logger.error(
                     f"Failed to add manual task for group {group_qq}, "
-                    f"domain {domain_name}: {e}"
+                    f"domain {domain_name}: {e}",
+                    exc_info=True,
                 )
 
     async def _push_callback(self, group_qq: str, domain_id: int, domain_name: str):
@@ -175,22 +241,29 @@ class QuizScheduler:
             )
 
             if not problems:
-                logger.warning(f"No problems found for domain {domain_name}")
+                logger.warning(
+                    f"Push skipped: No problems found for domain {domain_name} (ID: {domain_id})"
+                )
                 return
 
             # 获取该领域对应的小组
             domain_info = self.db.get_domain_by_name(domain_name)
             if not domain_info:
-                logger.warning(f"Domain info not found: {domain_name}")
+                logger.warning(f"Push aborted: Domain info not found for {domain_name}")
                 return
 
             group_id = domain_info.get("group_id")
             if not group_id:
-                logger.warning(f"No group_id for domain: {domain_name}")
+                logger.warning(
+                    f"Push metadata missing: No group_id defined for domain {domain_name}"
+                )
                 return
 
             # 获取订阅该小组的用户
             subscribers = self.db.get_group_subscribers(group_id)
+            logger.debug(
+                f"Pushing to {group_qq}, domain {domain_name}, subscribers count: {len(subscribers)}"
+            )
 
             # 构建推送消息
             message_chain = self._format_push_message(
@@ -199,54 +272,64 @@ class QuizScheduler:
 
             # 发送消息
             result = MessageEventResult()
-            for component in message_chain:
-                result.use_t2i = False
-                result.chain.append(component)
+            result.use_t2i = False
+            result.chain = message_chain
 
-            # 使用统一消息来源发送
-            # 格式：platform_id:message_type:session_id
             # 尝试通过所有可用平台发送消息
             if (
                 not hasattr(self.context, "platform_manager")
                 or not self.context.platform_manager.platform_insts
             ):
-                logger.error("No platform available to send message")
+                logger.error(
+                    "Critical: No platform instances found in context.platform_manager"
+                )
                 return
 
             sent_success = False
             for platform in self.context.platform_manager.platform_insts:
                 try:
+                    # 使用 platform.meta().id 是最稳健的方式
                     platform_id = platform.meta().id
+
                     # 构建正确的 unified_msg_origin
                     # 格式：platform_id:MessageType:session_id
+                    # 绝大多数 adapter 期望 MessageType 为 GroupMessage (帕斯卡命名)
                     unified_msg_origin = f"{platform_id}:GroupMessage:{group_qq}"
 
                     await self.context.send_message(unified_msg_origin, result)
                     logger.info(
-                        f"Pushed {len(problems)} problems to group {group_qq} via {platform_id}"
+                        f"Successfully pushed {len(problems)} problems to group {group_qq} via platform {platform_id}"
                     )
                     sent_success = True
-                    break  # 假设一个群只属于一个平台，发送成功即停止
+                    break  # 发送成功即停止
                 except Exception as e:
-                    # 仅记录调试信息，尝试下一个平台
-                    logger.debug(
-                        f"Failed to send to group {group_qq} via {platform_id}: {e}"
+                    logger.warning(
+                        f"Failed push attempt to group {group_qq} via {platform_id if 'platform_id' in locals() else 'unknown'}: {e}"
                     )
 
             if not sent_success:
                 logger.error(
-                    f"Failed to push message to group {group_qq}. Use 'debug' level log to see details."
+                    f"Final Failure: Could not push message to group {group_qq} on any available platform"
                 )
+                return  # 不更新 cursor
 
             # 推送成功后更新游标到下一批次
             if next_cursor > 0:  # 只有在使用批次系统时才更新
                 self.db.update_cursor(group_qq, domain_id, next_cursor)
                 logger.info(
-                    f"Updated cursor to {next_cursor} for group {group_qq}, domain {domain_id}"
+                    f"Progress Updated: Cursor moved to {next_cursor} for group {group_qq}, domain {domain_id}"
                 )
 
+        except sqlite3.Error as e:
+            logger.error(
+                f"Database error in push callback for group {group_qq}, domain {domain_name}: {e}",
+                exc_info=True,
+            )
         except Exception as e:
-            logger.error(f"Error in push callback: {e}", exc_info=True)
+            logger.error(
+                f"Unexpected error in push callback for group {group_qq}, domain {domain_name}: {e}",
+                exc_info=True,
+            )
 
     def _format_push_message(
         self, domain_name: str, problems: list[dict], subscribers: list[str]

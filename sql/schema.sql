@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS domain (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     group_id INTEGER,
+    default_batch_size INTEGER DEFAULT 3,
     total_score INTEGER DEFAULT 0,
     FOREIGN KEY (group_id) REFERENCES groups(id)
 );
@@ -55,8 +56,8 @@ CREATE TABLE IF NOT EXISTS group_task_config (
     FOREIGN KEY (domain_id) REFERENCES domain(id)
 );
 
--- 为 group_task_config 表创建复合索引
-CREATE INDEX IF NOT EXISTS idx_group_task_config ON group_task_config(group_qq, domain_id, push_time, is_active);
+-- ✅ v1.0.1 修复：使用唯一索引防止重复记录
+CREATE UNIQUE INDEX IF NOT EXISTS idx_group_task_unique ON group_task_config(group_qq, domain_id);
 
 -- 用户表
 CREATE TABLE IF NOT EXISTS users (
