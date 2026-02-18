@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS groups (
     name TEXT NOT NULL
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS group_name_unique ON groups(name);
+
 -- 学习领域
 CREATE TABLE IF NOT EXISTS domain (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17,6 +19,8 @@ CREATE TABLE IF NOT EXISTS domain (
     total_score INTEGER DEFAULT 0,
     FOREIGN KEY (group_id) REFERENCES groups(id)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS domain_name_unique ON domain(name);
 
 -- 领域设置（用于控制每次推送题目的范围，闭区间表示法）
 CREATE TABLE IF NOT EXISTS domain_settings (
@@ -53,11 +57,24 @@ CREATE TABLE IF NOT EXISTS group_task_config (
     push_time TEXT DEFAULT '17:00',  -- 格式：17:30 或 09:00
     is_active INTEGER DEFAULT 0,     -- SQLite 使用 INTEGER 表示 boolean (0/1)
     now_cursor INTEGER DEFAULT 0,    -- 该领域下一系列推送题的起始索引位置
+    strategy_type TEXT DEFAULT 'batch' CHECK(strategy_type IN ('counter', 'batch', 'daterem')),
     FOREIGN KEY (domain_id) REFERENCES domain(id)
 );
 
 -- ✅ v1.0.1 修复：使用唯一索引防止重复记录
 CREATE UNIQUE INDEX IF NOT EXISTS idx_group_task_unique ON group_task_config(group_qq, domain_id);
+
+-- v1.1.0 新增表：题目推送计数
+CREATE TABLE IF NOT EXISTS problem_push_count (
+    group_qq TEXT NOT NULL,
+    problem_id INTEGER NOT NULL,
+    push_count INTEGER DEFAULT 0,
+    last_push_time DATETIME,
+    PRIMARY KEY (group_qq, problem_id),
+    FOREIGN KEY (problem_id) REFERENCES problems(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_count_lookup ON problem_push_count(group_qq, push_count);
 
 -- 用户表
 CREATE TABLE IF NOT EXISTS users (

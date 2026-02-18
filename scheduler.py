@@ -14,7 +14,8 @@ from astrbot.api.event import MessageEventResult
 from astrbot.api.message_components import At, Plain
 from astrbot.api.star import Context
 
-from .database import QuizDatabase
+from .repository import QuizRepository
+from .push_strategy.factory import StrategyFactory
 
 
 class QuizScheduler:
@@ -31,7 +32,7 @@ class QuizScheduler:
         "星期日": 6,
     }
 
-    def __init__(self, context: Context, db: QuizDatabase, config):
+    def __init__(self, context: Context, db: QuizRepository, config):
         """
         初始化调度器
 
@@ -128,9 +129,9 @@ class QuizScheduler:
                         continue
 
                     # ✅ Bug 1 修复：确保 cursor 记录存在
-                    cursor_record = self.db.get_cursor_record(group_qq, domain["id"])
+                    cursor_record = self.db.get_group_domain_config(group_qq, domain["id"])
                     if not cursor_record:
-                        self.db.init_cursor(group_qq, domain["id"], push_time)
+                        self.db.init_group_domain_config(group_qq, domain["id"], push_time)
                         logger.info(
                             f"Initialized cursor for weekly config: "
                             f"group={group_qq}, domain={domain_name}"
@@ -235,10 +236,11 @@ class QuizScheduler:
         logger.info(f"Push callback triggered: group={group_qq}, domain={domain_name}")
 
         try:
-            # 使用游标和批次配置获取题目
-            problems, next_cursor = self.db.get_problems_for_push_with_cursor(
-                group_qq, domain_id
-            )
+            # 1. 获取策略实例
+            strategy = StrategyFactory.get_group_strategy(self.db, group_qq, domain_id)
+            
+            # 2. 使用策略获取题目
+            problems = strategy.get_problems_to_push(group_qq, domain_id, limit=3)
 
             if not problems:
                 logger.warning(
@@ -270,55 +272,19 @@ class QuizScheduler:
                 domain_name, problems, subscribers
             )
 
-            # 发送消息
-            result = MessageEventResult()
-            result.use_t2i = False
-            result.chain = message_chain
-
-            # 尝试通过所有可用平台发送消息
-            if (
-                not hasattr(self.context, "platform_manager")
-                or not self.context.platform_manager.platform_insts
-            ):
-                logger.error(
-                    "Critical: No platform instances found in context.platform_manager"
-                )
-                return
-
-            sent_success = False
-            for platform in self.context.platform_manager.platform_insts:
-                try:
-                    # 使用 platform.meta().id 是最稳健的方式
-                    platform_id = platform.meta().id
-
-                    # 构建正确的 unified_msg_origin
-                    # 格式：platform_id:MessageType:session_id
-                    # 绝大多数 adapter 期望 MessageType 为 GroupMessage (帕斯卡命名)
-                    unified_msg_origin = f"{platform_id}:GroupMessage:{group_qq}"
-
-                    await self.context.send_message(unified_msg_origin, result)
-                    logger.info(
-                        f"Successfully pushed {len(problems)} problems to group {group_qq} via platform {platform_id}"
-                    )
-                    sent_success = True
-                    break  # 发送成功即停止
-                except Exception as e:
-                    logger.warning(
-                        f"Failed push attempt to group {group_qq} via {platform_id if 'platform_id' in locals() else 'unknown'}: {e}"
-                    )
+            # 3. 发送消息
+            sent_success = await self._send_push_message(group_qq, message_chain)
 
             if not sent_success:
                 logger.error(
                     f"Final Failure: Could not push message to group {group_qq} on any available platform"
                 )
-                return  # 不更新 cursor
+                return
 
-            # 推送成功后更新游标到下一批次
-            if next_cursor > 0:  # 只有在使用批次系统时才更新
-                self.db.update_cursor(group_qq, domain_id, next_cursor)
-                logger.info(
-                    f"Progress Updated: Cursor moved to {next_cursor} for group {group_qq}, domain {domain_id}"
-                )
+            # 4. 推送成功回调 (更新状态)
+            problem_ids = [p['id'] for p in problems]
+            strategy.on_push_success(group_qq, domain_id, problem_ids)
+            logger.info(f"Strategy callback completed: {type(strategy).__name__}")
 
         except sqlite3.Error as e:
             logger.error(
@@ -330,6 +296,56 @@ class QuizScheduler:
                 f"Unexpected error in push callback for group {group_qq}, domain {domain_name}: {e}",
                 exc_info=True,
             )
+
+    async def _send_push_message(self, group_qq: str, message_chain: list) -> bool:
+        """
+        发送推送消息到所有可用平台
+
+        Args:
+            group_qq: 群号
+            message_chain: 消息链
+
+        Returns:
+            bool: 是否发送成功
+        """
+        # 发送消息
+        result = MessageEventResult()
+        result.use_t2i = False
+        result.chain = message_chain
+
+        # 尝试通过所有可用平台发送消息
+        if (
+            not hasattr(self.context, "platform_manager")
+            or not self.context.platform_manager.platform_insts
+        ):
+            logger.error(
+                "Critical: No platform instances found in context.platform_manager"
+            )
+            return False
+
+        sent_success = False
+        for platform in self.context.platform_manager.platform_insts:
+            try:
+                # 使用 platform.meta().id 是最稳健的方式
+                platform_id = platform.meta().id
+
+                # 构建正确的 unified_msg_origin
+                # 格式：platform_id:MessageType:session_id
+                # 绝大多数 adapter 期望 MessageType 为 GroupMessage (帕斯卡命名)
+                unified_msg_origin = f"{platform_id}:GroupMessage:{group_qq}"
+
+                await self.context.send_message(unified_msg_origin, result)
+                logger.info(
+                    f"Successfully pushed to group {group_qq} via platform {platform_id}"
+                )
+                sent_success = True
+                break  # 发送成功即停止
+            except Exception as e:
+                logger.warning(
+                    f"Failed push attempt to group {group_qq} via {platform_id if 'platform_id' in locals() else 'unknown'}: {e}"
+                )
+        
+        return sent_success
 
     def _format_push_message(
         self, domain_name: str, problems: list[dict], subscribers: list[str]

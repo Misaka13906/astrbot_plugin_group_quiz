@@ -10,8 +10,8 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
-from .commands import CommandHandlers
-from .database import QuizDatabase
+from .handlers import CommandHandlers
+from .repository import QuizRepository
 from .scheduler import QuizScheduler
 
 
@@ -26,13 +26,13 @@ class DummyConfig(dict):
         )
 
 
-@register("group_quiz", "Misaka13906", "群聊答题插件", "v1.0.1")
+@register("group_quiz", "Misaka13906", "群聊答题插件", "v1.1.0")
 class GroupQuizPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
         self.context = context
         self.config = config  # 保存插件配置（可能为 None）
-        self.db: QuizDatabase | None = None
+        self.db: QuizRepository | None = None
         self.quiz_scheduler: QuizScheduler | None = None
         self.cmd_handlers: CommandHandlers | None = None
 
@@ -67,7 +67,7 @@ class GroupQuizPlugin(Star):
             db_path = data_dir / "quiz.db"
             schema_path = plugin_dir / "sql" / "schema.sql"
 
-            self.db = QuizDatabase(str(db_path))
+            self.db = QuizRepository(str(db_path))
             self.db.connect()
 
             # 检查数据库是否已正确初始化
@@ -224,6 +224,18 @@ class GroupQuizPlugin(Star):
     async def cmd_task(self, event: AstrMessageEvent):
         """管理员指令：切换本群的题目推送状态"""
         async for result in self._delegate_to_cmd_handler("cmd_task", event):
+            yield result
+
+    @filter.command("lstra")
+    async def cmd_list_strategy(self, event: AstrMessageEvent):
+        """查看本群推送策略及状态"""
+        async for result in self._delegate_to_cmd_handler("cmd_list_strategy", event):
+            yield result
+
+    @filter.command("stra")
+    async def cmd_strategy(self, event: AstrMessageEvent):
+        """推送策略管理指令"""
+        async for result in self._delegate_to_cmd_handler("cmd_strategy", event):
             yield result
 
     async def terminate(self):
