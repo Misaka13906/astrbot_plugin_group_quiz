@@ -1,37 +1,40 @@
 from astrbot.api import logger
 
+from .models import Domain, Group
+
+
 class BaseInfoMixin:
     """基础信息操作：Groups, Domains, Users, Subscribes"""
 
     # ==================== Groups 相关操作 ====================
 
-    def get_all_groups(self) -> list[dict]:
+    def get_all_groups(self) -> list[Group]:
         """获取所有学习小组"""
         with self.get_locked_cursor() as cursor:
             cursor.execute("SELECT id, name FROM groups")
-            return [dict(row) for row in cursor.fetchall()]
+            return [Group(**dict(row)) for row in cursor.fetchall()]
 
-    def get_group_by_name(self, name: str) -> dict | None:
+    def get_group_by_name(self, name: str) -> Group | None:
         """根据名称获取小组"""
         with self.get_locked_cursor() as cursor:
             cursor.execute("SELECT id, name FROM groups WHERE name = ?", (name,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            return Group(**dict(row)) if row else None
 
     # ==================== Domain 相关操作 ====================
 
-    def get_all_domains(self) -> list[dict]:
+    def get_all_domains(self) -> list[Domain]:
         """获取所有领域"""
         with self.get_locked_cursor() as cursor:
             cursor.execute("SELECT * FROM domain")
-            return [dict(row) for row in cursor.fetchall()]
+            return [Domain(**dict(row)) for row in cursor.fetchall()]
 
-    def get_domain_by_name(self, name: str) -> dict | None:
+    def get_domain_by_name(self, name: str) -> Domain | None:
         """根据名称获取领域"""
         with self.get_locked_cursor() as cursor:
             cursor.execute("SELECT * FROM domain WHERE name = ?", (name,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            return Domain(**dict(row)) if row else None
 
     # ==================== Users 和 Subscribes 相关操作 ====================
 
@@ -46,7 +49,7 @@ class BaseInfoMixin:
             logger.error(f"Failed to ensure user exists: {e}", exc_info=True)
             return False
 
-    def get_user_groups(self, user_qq: str) -> list[dict]:
+    def get_user_groups(self, user_qq: str) -> list[Group]:
         """获取用户加入的所有小组"""
         with self.get_locked_cursor() as cursor:
             cursor.execute(
@@ -58,7 +61,7 @@ class BaseInfoMixin:
             """,
                 (user_qq,),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            return [Group(**dict(row)) for row in cursor.fetchall()]
 
     def subscribe_group(self, user_qq: str, group_id: int) -> bool:
         """订阅小组"""

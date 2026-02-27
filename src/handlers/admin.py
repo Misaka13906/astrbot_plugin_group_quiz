@@ -1,12 +1,18 @@
 import shlex
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-from .base import BaseHandler
 
-class AdminHandlers(BaseHandler):
+if TYPE_CHECKING:
+    from ..repository import QuizRepository
+
+
+class AdminHandlers:
     """管理员指令处理器"""
+
+    db: "QuizRepository"
 
     async def cmd_task(self, event: AstrMessageEvent):
         """管理员指令：切换本群的题目推送状态"""
@@ -47,7 +53,7 @@ class AdminHandlers(BaseHandler):
             return
 
         target = parts[2]  # domain_name/all/default
-        push_time = parts[3] if len(parts) > 3 else "17:00"
+        push_time = parts[3] if len(parts) > 3 else "12:00"
 
         # 验证时间格式
         try:
@@ -134,7 +140,7 @@ class AdminHandlers(BaseHandler):
             return
 
         success = self.db.upsert_group_task_config(
-            group_qq, domain["id"], push_time, is_active
+            group_qq, domain.id, push_time, is_active
         )
 
         if success:
@@ -153,7 +159,7 @@ class AdminHandlers(BaseHandler):
         else:
             yield event.plain_result("❌ 操作失败")
 
-    async def cmd_push_test(self, event: AstrMessageEvent, domain_name: str = ""):
+    async def cmd_push_test(self, event: AstrMessageEvent, domain_name: str = None):
         """(调试) 立即触发一次推送"""
         if not event.is_admin():
             yield event.plain_result("❌ 此命令仅限管理员使用")
@@ -175,4 +181,56 @@ class AdminHandlers(BaseHandler):
 
         yield event.plain_result(f"🚀 正尝试立即推送 [{domain_name}] 到本群...")
         # 直接调用回调
-        await self.scheduler._push_callback(group_qq, domain["id"], domain["name"])
+        await self.scheduler._push_callback(group_qq, domain.id, domain.name)
+
+    async def cmd_view_ans(self, event: AstrMessageEvent):
+        """(管理员) 查看题目的特定答案字段"""
+        if not event.is_admin():
+            yield event.plain_result("❌ 此命令仅限管理员使用")
+            return
+
+        message = event.message_str.strip()
+        try:
+            parts = shlex.split(message)
+        except ValueError as e:
+            yield event.plain_result(f"❌ 命令解析失败：{str(e)}")
+            return
+
+        if len(parts) < 3:
+            yield event.plain_result(
+                "❌ 参数不足。用法：/vans {problem_id} {default|llm|web}"
+            )
+            return
+
+        problem_id = parts[1]
+        ans_type = parts[2].lower()
+
+        if not problem_id.isdigit():
+            yield event.plain_result("❌ 题目 ID 必须是数字")
+            return
+
+        if ans_type not in ["default", "llm", "web"]:
+            yield event.plain_result("❌ 答案类型必须是 default, llm 或 web")
+            return
+
+        pid = int(problem_id)
+        problem = self.db.get_problem_by_id(pid)
+
+        if not problem:
+            yield event.plain_result(f"❌ 未找到题目 ID: {problem_id}")
+            return
+
+        ans_field = f"{ans_type}_ans"
+        ans_content = getattr(problem, ans_field, "")
+
+        if not ans_content:
+            ans_content = "(空)"
+
+        ans_text = f"📋 [题目 ID {problem_id}] 的 {ans_type} 答案：\n{ans_content}"
+
+        try:
+            from ..utils import build_mixed_message
+
+            yield build_mixed_message(ans_text, event.make_result())
+        except ImportError:
+            yield event.plain_result(ans_text)

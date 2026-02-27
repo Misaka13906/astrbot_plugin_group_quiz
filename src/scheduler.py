@@ -14,8 +14,9 @@ from astrbot.api.event import MessageEventResult
 from astrbot.api.message_components import At, Plain
 from astrbot.api.star import Context
 
-from .repository import QuizRepository
 from .push_strategy.factory import StrategyFactory
+from .repository import QuizRepository
+from .repository.models import GroupTaskConfig
 
 
 class QuizScheduler:
@@ -115,7 +116,7 @@ class QuizScheduler:
                 if day_name not in self.WEEKDAY_MAP:
                     continue
 
-                push_time = day_config.get("time", "17:00")
+                push_time = day_config.get("time", "12:00")
                 domains = day_config.get("domains", [])
 
                 if not domains:
@@ -129,9 +130,9 @@ class QuizScheduler:
                         continue
 
                     # ✅ Bug 1 修复：确保 cursor 记录存在
-                    cursor_record = self.db.get_group_domain_config(group_qq, domain["id"])
+                    cursor_record = self.db.get_group_domain_config(group_qq, domain.id)
                     if not cursor_record:
-                        self.db.init_group_domain_config(group_qq, domain["id"], push_time)
+                        self.db.init_group_domain_config(group_qq, domain.id, push_time)
                         logger.info(
                             f"Initialized cursor for weekly config: "
                             f"group={group_qq}, domain={domain_name}"
@@ -157,7 +158,7 @@ class QuizScheduler:
                     self.scheduler.add_job(
                         self._push_callback,
                         trigger,
-                        args=[group_qq, domain["id"], domain_name],
+                        args=[group_qq, domain.id, domain_name],
                         id=f"default_{group_qq}_{day_name}_{domain_name}",
                         replace_existing=True,
                         misfire_grace_time=300,
@@ -176,18 +177,18 @@ class QuizScheduler:
         """
         with self.db.get_locked_cursor() as cursor:
             cursor.execute("""
-                SELECT gtc.group_qq, gtc.domain_id, gtc.push_time, d.name as domain_name
+                SELECT gtc.*, d.name as domain_name
                 FROM group_task_config gtc
                 JOIN domain d ON gtc.domain_id = d.id
                 WHERE gtc.is_active = 1
             """)
-            manual_configs = cursor.fetchall()
+            manual_configs = [GroupTaskConfig(**dict(row)) for row in cursor.fetchall()]
 
         for config in manual_configs:
-            group_qq = config["group_qq"]
-            domain_id = config["domain_id"]
-            push_time = config["push_time"]
-            domain_name = config["domain_name"]
+            group_qq = config.group_qq
+            domain_id = config.domain_id
+            push_time = config.push_time
+            domain_name = config.domain_name or ""
 
             # 跳过使用默认配置的群
             if group_qq in use_default_groups:
@@ -236,25 +237,33 @@ class QuizScheduler:
         logger.info(f"Push callback triggered: group={group_qq}, domain={domain_name}")
 
         try:
-            # 1. 获取策略实例
-            strategy = StrategyFactory.get_group_strategy(self.db, group_qq, domain_id)
-            
-            # 2. 使用策略获取题目
-            problems = strategy.get_problems_to_push(group_qq, domain_id, limit=3)
-
-            if not problems:
-                logger.warning(
-                    f"Push skipped: No problems found for domain {domain_name} (ID: {domain_id})"
-                )
-                return
-
-            # 获取该领域对应的小组
+            # 获取该领域对应的信息 (包含 default_batch_size)
             domain_info = self.db.get_domain_by_name(domain_name)
             if not domain_info:
                 logger.warning(f"Push aborted: Domain info not found for {domain_name}")
                 return
 
-            group_id = domain_info.get("group_id")
+            batch_size = domain_info.default_batch_size or 3
+
+            # 1. 获取策略实例
+            strategy = StrategyFactory.get_group_strategy(self.db, group_qq, domain_id)
+
+            # 2. 使用策略获取题目
+            problems = strategy.get_problems_to_push(
+                group_qq, domain_id, limit=batch_size
+            )
+
+            if not problems:
+                logger.warning(
+                    f"Push skipped: No problems found for domain {domain_name} (ID: {domain_id})"
+                )
+                msg_text = f"📅 今日八股推送 [{domain_name}]\n\n该领域暂无题目"
+                from astrbot.api.message_components import Plain
+
+                await self._send_push_message(group_qq, [Plain(msg_text)])
+                return
+
+            group_id = domain_info.group_id
             if not group_id:
                 logger.warning(
                     f"Push metadata missing: No group_id defined for domain {domain_name}"
@@ -282,7 +291,7 @@ class QuizScheduler:
                 return
 
             # 4. 推送成功回调 (更新状态)
-            problem_ids = [p['id'] for p in problems]
+            problem_ids = [p.id for p in problems]
             strategy.on_push_success(group_qq, domain_id, problem_ids)
             logger.info(f"Strategy callback completed: {type(strategy).__name__}")
 
@@ -344,7 +353,7 @@ class QuizScheduler:
                 logger.warning(
                     f"Failed push attempt to group {group_qq} via {platform_id if 'platform_id' in locals() else 'unknown'}: {e}"
                 )
-        
+
         return sent_success
 
     def _format_push_message(
@@ -367,11 +376,16 @@ class QuizScheduler:
         text_lines.append("")  # 空行
 
         for problem in problems:
-            text_lines.append(f"[题目 ID: {problem['id']}]")
-            text_lines.append(problem["question"])
+            category_name = problem.category_name or "未知分类"
+            topic = problem.topic or "无主题"
+            text_lines.append(f"[ID: {problem.id}] [{category_name}] [{topic}]")
+            text_lines.append(problem.question)
             text_lines.append("")  # 空行
 
-        text_lines.append("回复 /ans {id} 获取参考答案。")
+        text_lines.append("💡 互动提示：")
+        text_lines.append("▶ 回复 /a <题目ID> <你的回答> 参与抢分！")
+        text_lines.append("▶ 回复 /h <题目ID> 获取下一考点提示。")
+        text_lines.append("▶ 回复 /ans <题目ID> 查看详细参考答案。")
 
         # 如果有订阅者，添加到文本末尾
         message_text = "\n".join(text_lines)

@@ -1,11 +1,14 @@
 from astrbot.api import logger
 
+from .models import DomainSetting, GroupTaskConfig
+
+
 class TaskMixin:
     """任务配置与推送策略相关操作"""
 
     # ==================== Group Task Config 相关操作 ====================
 
-    def get_group_task_config(self, group_qq: str) -> list[dict]:
+    def get_group_task_config(self, group_qq: str) -> list[GroupTaskConfig]:
         """获取群聊的任务配置"""
         with self.get_locked_cursor() as cursor:
             cursor.execute(
@@ -17,9 +20,9 @@ class TaskMixin:
             """,
                 (group_qq,),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            return [GroupTaskConfig(**dict(row)) for row in cursor.fetchall()]
 
-    def get_active_group_task_config(self, group_qq: str) -> list[dict]:
+    def get_active_group_task_config(self, group_qq: str) -> list[GroupTaskConfig]:
         """获取群聊的激活任务配置"""
         with self.get_locked_cursor() as cursor:
             cursor.execute(
@@ -31,7 +34,7 @@ class TaskMixin:
             """,
                 (group_qq,),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            return [GroupTaskConfig(**dict(row)) for row in cursor.fetchall()]
 
     def upsert_group_task_config(
         self,
@@ -72,7 +75,7 @@ class TaskMixin:
                 else:
                     # 插入前先获取初始 cursor
                     first_batch = self.get_first_batch(domain_id)
-                    initial_cursor = first_batch["start_index"] if first_batch else 1
+                    initial_cursor = first_batch.start_index if first_batch else 1
 
                     # 插入
                     cursor.execute(
@@ -105,14 +108,15 @@ class TaskMixin:
             # 由于最终 QuizRepository 继承所有 Mixin，这里应该能调得到。
             domains = self.get_all_domains()
 
-            with self.get_locked_cursor() as _:
+            with self.get_locked_cursor() as cursor:
+                cursor.execute("BEGIN;")
                 for domain in domains:
                     # 批量操作时设置 commit=False，最后统一手动提交
                     self.upsert_group_task_config(
-                        group_qq, domain["id"], push_time, is_active, commit=False
+                        group_qq, domain.id, push_time, is_active, commit=False
                     )
 
-                self.conn.commit()
+                cursor.execute("COMMIT;")
             return True
         except Exception as e:
             logger.error(f"Failed to set all domains active: {e}", exc_info=True)
@@ -138,7 +142,9 @@ class TaskMixin:
 
     # ==================== Cursor & Batch 相关操作 ====================
 
-    def get_group_domain_config(self, group_qq: str, domain_id: int) -> dict | None:
+    def get_group_domain_config(
+        self, group_qq: str, domain_id: int
+    ) -> GroupTaskConfig | None:
         """检查任务配置是否存在"""
         with self.get_locked_cursor() as cursor:
             cursor.execute(
@@ -149,38 +155,43 @@ class TaskMixin:
                 (group_qq, domain_id),
             )
             row = cursor.fetchone()
-            return dict(row) if row else None
+            return GroupTaskConfig(**dict(row)) if row else None
 
-    def init_group_domain_config(self, group_qq: str, domain_id: int, push_time: str = "17:00"):
+    def init_group_domain_config(
+        self, group_qq: str, domain_id: int, push_time: str = "12:00"
+    ):
         """初始化任务配置"""
         first_batch = self.get_first_batch(domain_id)
-        initial_cursor = first_batch["start_index"] if first_batch else 1
+        initial_category_id = first_batch.category_id if first_batch else 0
+        initial_cursor = first_batch.start_index if first_batch else 1
 
         with self.get_locked_cursor() as cursor:
             cursor.execute(
                 """
                 INSERT OR IGNORE INTO group_task_config
-                (group_qq, domain_id, now_cursor, push_time, is_active)
-                VALUES (?, ?, ?, ?, 1)
+                (group_qq, domain_id, now_category_id, now_cursor, push_time, is_active)
+                VALUES (?, ?, ?, ?, ?, 1)
             """,
-                (group_qq, domain_id, initial_cursor, push_time),
+                (group_qq, domain_id, initial_category_id, initial_cursor, push_time),
             )
             self.conn.commit()
 
         logger.info(
-            f"Initialized cursor for group {group_qq}, domain {domain_id}, cursor={initial_cursor}"
+            f"Initialized cursor for group {group_qq}, domain {domain_id}, category={initial_category_id}, cursor={initial_cursor}"
         )
 
-    def update_cursor(self, group_qq: str, domain_id: int, new_cursor: int) -> bool:
+    def update_cursor(
+        self, group_qq: str, domain_id: int, new_category_id: int, new_cursor: int
+    ) -> bool:
         """更新推送游标"""
         with self.get_locked_cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE group_task_config
-                SET now_cursor = ?
+                SET now_category_id = ?, now_cursor = ?
                 WHERE group_qq = ? AND domain_id = ?
             """,
-                (new_cursor, group_qq, domain_id),
+                (new_category_id, new_cursor, group_qq, domain_id),
             )
 
             if cursor.rowcount == 0:
@@ -196,172 +207,225 @@ class TaskMixin:
             )
             return True
 
-    def get_cursor(self, group_qq: str, domain_id: int) -> int:
-        """获取当前游标位置"""
+    def get_cursor(self, group_qq: str, domain_id: int) -> tuple[int, int]:
+        """获取当前游标位置 (category_id, start_index)"""
         with self.get_locked_cursor() as cursor:
             cursor.execute(
                 """
-                SELECT now_cursor FROM group_task_config
+                SELECT now_category_id, now_cursor FROM group_task_config
                 WHERE group_qq = ? AND domain_id = ?
             """,
                 (group_qq, domain_id),
             )
             row = cursor.fetchone()
 
-            if row and row["now_cursor"] > 0:
-                return row["now_cursor"]
+            if row:
+                return row["now_category_id"], row["now_cursor"]
 
             first_batch = self.get_first_batch(domain_id)
-            return first_batch["start_index"] if first_batch else 1
+            return (
+                (first_batch.category_id, first_batch.start_index)
+                if first_batch
+                else (0, 1)
+            )
 
-    def get_batch_by_start_index(self, domain_id: int, start_idx: int) -> dict | None:
-        """根据 start_index 查找批次配置"""
+    def get_batch_by_start_index(
+        self, domain_id: int, category_id: int, start_idx: int
+    ) -> DomainSetting | None:
+        """根据 category_id 和 start_index 查找批次配置"""
         with self.get_locked_cursor() as cursor:
             cursor.execute(
                 """
                 SELECT * FROM domain_settings
-                WHERE domain_id = ? AND start_index = ?
+                WHERE domain_id = ? AND category_id = ? AND start_index = ?
             """,
-                (domain_id, start_idx),
+                (domain_id, category_id, start_idx),
             )
             row = cursor.fetchone()
-            return dict(row) if row else None
+            return DomainSetting(**dict(row)) if row else None
 
-    def get_first_batch(self, domain_id: int) -> dict | None:
+    def get_first_batch(self, domain_id: int) -> DomainSetting | None:
         """获取第一批配置"""
         with self.get_locked_cursor() as cursor:
             cursor.execute(
                 """
                 SELECT * FROM domain_settings
                 WHERE domain_id = ?
-                ORDER BY start_index ASC
+                ORDER BY id ASC
                 LIMIT 1
             """,
                 (domain_id,),
             )
             row = cursor.fetchone()
-            return dict(row) if row else None
+            return DomainSetting(**dict(row)) if row else None
 
-    def get_next_batch(self, domain_id: int, current_start_idx: int) -> dict | None:
+    def get_next_batch(
+        self, domain_id: int, current_category_id: int, current_start_idx: int
+    ) -> DomainSetting | None:
         """获取下一批配置"""
         with self.get_locked_cursor() as cursor:
             cursor.execute(
                 """
-                SELECT * FROM domain_settings
-                WHERE domain_id = ? AND start_index > ?
-                ORDER BY start_index ASC
-                LIMIT 1
-            """,
-                (domain_id, current_start_idx),
+                SELECT id FROM domain_settings
+                WHERE domain_id = ? AND category_id = ? AND start_index = ?
+                """,
+                (domain_id, current_category_id, current_start_idx),
             )
             row = cursor.fetchone()
-            return dict(row) if row else None
-            
-    def get_all_batches(self, domain_id: int) -> list[dict]:
+            if not row:
+                return None
+
+            cursor.execute(
+                """
+                SELECT * FROM domain_settings
+                WHERE domain_id = ? AND id > ?
+                ORDER BY id ASC
+                LIMIT 1
+            """,
+                (domain_id, row["id"]),
+            )
+            next_row = cursor.fetchone()
+            return DomainSetting(**dict(next_row)) if next_row else None
+
+    def get_all_batches(self, domain_id: int) -> list[DomainSetting]:
         """获取领域的所有批次配置"""
         with self.get_locked_cursor() as cursor:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT * FROM domain_settings
                 WHERE domain_id = ?
                 ORDER BY start_index ASC
-            """, (domain_id,))
-            return [dict(row) for row in cursor.fetchall()]
+            """,
+                (domain_id,),
+            )
+            return [DomainSetting(**dict(row)) for row in cursor.fetchall()]
 
     # ==================== Strategy Operations (v1.1.0) ====================
 
     def get_strategy_type(self, group_qq: str, domain_id: int) -> str:
         """获取群-领域的推送策略"""
         with self.get_locked_cursor() as cursor:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT strategy_type FROM group_task_config
                 WHERE group_qq = ? AND domain_id = ?
-            """, (group_qq, domain_id))
+            """,
+                (group_qq, domain_id),
+            )
             row = cursor.fetchone()
-            return row['strategy_type'] if row else 'batch'
+            return row["strategy_type"] if row else "batch"
 
-    def set_strategy_type(self, group_qq: str, domain_id: int, strategy_type: str) -> bool:
+    def set_strategy_type(
+        self, group_qq: str, domain_id: int, strategy_type: str
+    ) -> bool:
         """设置推送策略"""
         with self.get_locked_cursor() as cursor:
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE group_task_config
                 SET strategy_type = ?
                 WHERE group_qq = ? AND domain_id = ?
-            """, (strategy_type, group_qq, domain_id))
+            """,
+                (strategy_type, group_qq, domain_id),
+            )
             self.conn.commit()
             return cursor.rowcount > 0
 
-    def get_problem_push_counts(self, group_qq: str, problem_ids: list[int]) -> dict[int, int]:
+    def get_problem_push_counts(
+        self, group_qq: str, problem_ids: list[int]
+    ) -> dict[int, int]:
         """批量获取题目推送次数"""
         if not problem_ids:
             return {}
-        
-        placeholders = ','.join('?' * len(problem_ids))
+
+        placeholders = ",".join("?" * len(problem_ids))
         args = [group_qq] + problem_ids
         with self.get_locked_cursor() as cursor:
             query = f"""
-                SELECT problem_id, push_count 
+                SELECT problem_id, push_count
                 FROM problem_push_count
                 WHERE group_qq = ? AND problem_id IN ({placeholders})
             """
             cursor.execute(query, args)
-            return {row['problem_id']: row['push_count'] for row in cursor.fetchall()}
+            return {row["problem_id"]: row["push_count"] for row in cursor.fetchall()}
 
     def update_push_count(self, group_qq: str, problem_id: int):
         """更新题目推送计数 (+1)"""
         with self.get_locked_cursor() as cursor:
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO problem_push_count (group_qq, problem_id, push_count, last_push_time)
                 VALUES (?, ?, 1, datetime('now'))
-                ON CONFLICT(group_qq, problem_id) 
-                DO UPDATE SET 
-                    push_count = push_count + 1, 
+                ON CONFLICT(group_qq, problem_id)
+                DO UPDATE SET
+                    push_count = push_count + 1,
                     last_push_time = datetime('now')
-            """, (group_qq, problem_id))
+            """,
+                (group_qq, problem_id),
+            )
             self.conn.commit()
 
     def get_domain_stats(self, group_qq: str, domain_id: int) -> dict:
         """获取领域推送统计信息"""
         with self.get_locked_cursor() as cursor:
-            cursor.execute("""
-                SELECT 
+            cursor.execute(
+                """
+                SELECT
                     COUNT(*) as total_problems,
                     SUM(COALESCE(pc.push_count, 0)) as total_pushes,
                     AVG(COALESCE(pc.push_count, 0)) as avg_pushes,
                     MIN(COALESCE(pc.push_count, 0)) as min_pushes,
                     MAX(COALESCE(pc.push_count, 0)) as max_pushes
                 FROM problems p
-                LEFT JOIN problem_push_count pc 
+                LEFT JOIN problem_push_count pc
                     ON p.id = pc.problem_id AND pc.group_qq = ?
                 WHERE p.domain_id = ?
-            """, (group_qq, domain_id))
+            """,
+                (group_qq, domain_id),
+            )
             row = cursor.fetchone()
             return dict(row) if row else {}
 
     def reset_domain_progress(self, group_qq: str, domain_id: int, strategy_type: str):
         """重置领域进度"""
         with self.get_locked_cursor() as cursor:
-            if strategy_type == 'counter':
-                cursor.execute("""
-                    DELETE FROM problem_push_count
-                    WHERE group_qq = ? AND problem_id IN (
-                        SELECT id FROM problems WHERE domain_id = ?
+            try:
+                cursor.execute("BEGIN;")
+                if strategy_type == "counter":
+                    cursor.execute(
+                        """
+                        DELETE FROM problem_push_count
+                        WHERE group_qq = ? AND problem_id IN (
+                            SELECT id FROM problems WHERE domain_id = ?
+                        )
+                    """,
+                        (group_qq, domain_id),
                     )
-                """, (group_qq, domain_id))
-            elif strategy_type == 'batch':
-                # 重置游标到第一批
-                cursor.execute("""
-                    SELECT start_index FROM domain_settings
-                    WHERE domain_id = ?
-                    ORDER BY start_index ASC
-                    LIMIT 1
-                """, (domain_id,))
-                row = cursor.fetchone()
-                start_index = row['start_index'] if row else 1
-                
-                cursor.execute("""
-                    UPDATE group_task_config
-                    SET now_cursor = ?
-                    WHERE group_qq = ? AND domain_id = ?
-                """, (start_index, group_qq, domain_id))
-            
-            self.conn.commit()
+                elif strategy_type == "batch":
+                    # 重置游标到第一批
+                    cursor.execute(
+                        """
+                        SELECT start_index FROM domain_settings
+                        WHERE domain_id = ?
+                        ORDER BY start_index ASC
+                        LIMIT 1
+                    """,
+                        (domain_id,),
+                    )
+                    row = cursor.fetchone()
+                    start_index = row["start_index"] if row else 1
+
+                    cursor.execute(
+                        """
+                        UPDATE group_task_config
+                        SET now_cursor = ?
+                        WHERE group_qq = ? AND domain_id = ?
+                    """,
+                        (start_index, group_qq, domain_id),
+                    )
+
+                cursor.execute("COMMIT;")
+            except Exception as e:
+                cursor.execute("ROLLBACK;")
+                logger.error(f"Failed to reset domain progress: {e}", exc_info=True)
+                raise

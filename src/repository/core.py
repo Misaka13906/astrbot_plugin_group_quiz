@@ -5,6 +5,7 @@ from contextlib import contextmanager
 
 from astrbot.api import logger
 
+
 class DatabaseCore:
     """数据库核心功能：连接管理、游标获取、初始化"""
 
@@ -21,8 +22,11 @@ class DatabaseCore:
 
     def connect(self):
         """建立数据库连接"""
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn = sqlite3.connect(
+            self.db_path, check_same_thread=False, isolation_level=None
+        )
         self.conn.row_factory = sqlite3.Row  # 启用字典式访问
+        self.conn.execute("PRAGMA journal_mode=WAL;")
 
     def close(self):
         """关闭数据库连接"""
@@ -60,23 +64,25 @@ class DatabaseCore:
         try:
             with open(schema_sql_path, encoding="utf-8") as f:
                 schema_sql = f.read()
-            
+
             # Check and apply migration to v1.1.0
-            migration_path = os.path.join(os.path.dirname(schema_sql_path), 'migrate_1.1.0.sql')
-            
+            migration_path = os.path.join(
+                os.path.dirname(schema_sql_path), "migrate_1.1.0.sql"
+            )
+
             with self.get_locked_cursor() as cursor:
                 # 执行基础 SQL 语句
                 cursor.executescript(schema_sql)
-                
+
                 if os.path.exists(migration_path):
-                     # Check if we need to migrate (check if column exists)
+                    # Check if we need to migrate (check if column exists)
                     cursor.execute("PRAGMA table_info(group_task_config)")
                     columns = [info[1] for info in cursor.fetchall()]
                     if "strategy_type" not in columns:
                         logger.info("Applying v1.1.0 migration...")
                         with open(migration_path, encoding="utf-8") as mf:
                             cursor.executescript(mf.read())
-                            
+
                 self.conn.commit()
             logger.info("Database schema initialized successfully")
             return True

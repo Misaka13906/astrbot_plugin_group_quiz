@@ -1,10 +1,22 @@
 {
+  "llm_provider": {
+    "type": "string",
+    "_special": "select_provider",
+    "hint": "选择一个已配置的对话模型提供商",
+    "providerType": "chat_completion",
+    "description": "判题大模型服务（留空将使用astrbot配置的默认的提供商）"
+  },
   "use_default": {
     "type": "list",
     "items": {
       "type": "string"
     },
     "description": "使用默认周推送配置的群号"
+  },
+  "exp_cooldown_days": {
+    "type": "int",
+    "description": "基础经验获取冷却期（天），防刷屏，默认30天",
+    "default": 30
   },
   "settings": {
     "type": "object",

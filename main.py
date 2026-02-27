@@ -9,10 +9,11 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
+from astrbot.core.star.filter.command import GreedyStr
 
-from .handlers import CommandHandlers
-from .repository import QuizRepository
-from .scheduler import QuizScheduler
+from .src.handlers import CommandHandlers
+from .src.repository import QuizRepository
+from .src.scheduler import QuizScheduler
 
 
 class DummyConfig(dict):
@@ -182,16 +183,26 @@ class GroupQuizPlugin(Star):
         ):
             yield result
 
+    @filter.command("a")
+    async def cmd_submit_answer(
+        self, event: AstrMessageEvent, problem_id: str, answer_parts: GreedyStr
+    ):
+        """提交回答：/a <题目ID> <你的回答>"""
+        async for result in self._delegate_to_cmd_handler(
+            "cmd_submit_answer", event, problem_id, answer_parts
+        ):
+            yield result
+
     @filter.command("ans")
-    async def cmd_answer(self, event: AstrMessageEvent, problem_id: str = ""):
+    async def cmd_answer(self, event: AstrMessageEvent, problem_id: str):
         """获取指定题目的参考答案"""
         async for result in self._delegate_to_cmd_handler(
-            "cmd_answer", event, problem_id
+            "cmd_get_answer", event, problem_id
         ):
             yield result
 
     @filter.command("prob")
-    async def cmd_problem(self, event: AstrMessageEvent, problem_id: str = ""):
+    async def cmd_problem(self, event: AstrMessageEvent, problem_id: str):
         """获取指定题目的题面内容"""
         async for result in self._delegate_to_cmd_handler(
             "cmd_problem", event, problem_id
@@ -199,15 +210,21 @@ class GroupQuizPlugin(Star):
             yield result
 
     @filter.command("pushnow")
-    async def cmd_push_test(self, event: AstrMessageEvent, domain_name: str = ""):
+    async def cmd_push_test(self, event: AstrMessageEvent, domain_name: str = None):
         """(调试) 立即触发一次推送"""
         async for result in self._delegate_to_cmd_handler(
             "cmd_push_test", event, domain_name
         ):
             yield result
 
+    @filter.command("vans")
+    async def cmd_view_ans(self, event: AstrMessageEvent):
+        """(管理员) 查看题目的特定答案字段"""
+        async for result in self._delegate_to_cmd_handler("cmd_view_ans", event):
+            yield result
+
     @filter.command("rand")
-    async def cmd_random(self, event: AstrMessageEvent, domain_name: str = ""):
+    async def cmd_random(self, event: AstrMessageEvent, domain_name: str = None):
         """随机抽取一道该领域的题目"""
         async for result in self._delegate_to_cmd_handler(
             "cmd_random", event, domain_name
@@ -215,7 +232,7 @@ class GroupQuizPlugin(Star):
             yield result
 
     @filter.command("search")
-    async def cmd_search(self, event: AstrMessageEvent, keyword: str = ""):
+    async def cmd_search(self, event: AstrMessageEvent, keyword: GreedyStr):
         """搜索题目：/search <关键词>"""
         async for result in self._delegate_to_cmd_handler("cmd_search", event, keyword):
             yield result
@@ -236,6 +253,28 @@ class GroupQuizPlugin(Star):
     async def cmd_strategy(self, event: AstrMessageEvent):
         """推送策略管理指令"""
         async for result in self._delegate_to_cmd_handler("cmd_strategy", event):
+            yield result
+
+    @filter.command("myscore")
+    async def cmd_myscore(self, event: AstrMessageEvent):
+        """查询个人的经验值和积分"""
+        async for result in self._delegate_to_cmd_handler("cmd_myscore", event):
+            yield result
+
+    @filter.command("lrank")
+    async def cmd_lrank(self, event: AstrMessageEvent, domain_name: str = None):
+        """查看本群的技术积分榜"""
+        async for result in self._delegate_to_cmd_handler(
+            "cmd_lrank", event, domain_name
+        ):
+            yield result
+
+    @filter.command("h")
+    async def cmd_hint(self, event: AstrMessageEvent, problem_id: str):
+        """获取指定题目的下一考点提示"""
+        async for result in self._delegate_to_cmd_handler(
+            "cmd_get_hint", event, problem_id
+        ):
             yield result
 
     async def terminate(self):

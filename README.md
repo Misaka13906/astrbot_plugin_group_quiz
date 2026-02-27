@@ -11,9 +11,16 @@
 - ⚙️ **灵活配置**：管理员可自定义推送时间和领域
 - 🔄 **智能循环**：题库推送完自动循环，持续学习
 
+## 📝 数据源构建
+1. **编写题目配置文件**：根据数据源（例如爬取的题库），将其转换为 JSON 格式，包含题目、答案和知识点等信息。
+   - **题目唯一性提示**：由于外部题库通常是分类存放的，AstrBot 的组队系统采用 `category` (类别) + `json_id` (来源文件内的原 ID) 共同作为题目的绝对唯一约束（数据库的 PRIMARY KEY 依然是 `id` 行号自增）。请务必保证每个种类下面的原 json_id 不冲突。
+2. **导入题库**：使用插件提供的脚本（如 `import_db.py`）将题目和答案批量导入。
+
 ## 文档链接目录
+- [产品设计文档 - 2.0.0](docs/design-2.0.0.md)
+- [更新日志 - 2.0.0](changelogs/v2.0.0.md)
 - [产品设计文档 - 1.0.0](docs/design-1.0.0.md)
-- [更新日志 - 1.0.1](docs/changelog-1.0.1.md)
+- [更新日志 - 1.0.1](changelogs/v1.0.1.md)
 
 ---
 ## 📋 目录
@@ -70,13 +77,16 @@ AstrBot/data/plugin_data/astrbot_plugin_group_quiz/quiz.db
 
 ```sql
 -- 添加题目
-INSERT INTO problems (domain_id, category, topic, question, answer, score) 
-VALUES (1, 'JVM', 'GC', '什么是垃圾回收？', '垃圾回收是自动内存管理...', 5);
+INSERT INTO problems (domain_id, category, json_id, topic, question, default_ans, score) 
+VALUES (1, 'Java基础', 1, 'GC', '什么是垃圾回收？', '垃圾回收是自动内存管理...', 5);
 
 -- 配置批次推送（可选）
-INSERT INTO domain_settings (domain_id, start_index, end_index) 
-VALUES (1, 1, 10);  -- Java 领域第一批：题目 1-10
+INSERT INTO domain_settings (domain_id, category, start_index, end_index) 
+VALUES (1, 'Java基础', 1, 5), (1, 'Java基础', 6, 10);  -- Java基础 第一批：json_id 1-5
 ```
+
+> 💡 **题目唯一性原则**：
+> 外部题库通常是分类存放的，由于不同类目下的 `id` 可能会重复，插件采用 **`category` (类别) + `json_id` (在独立 JSON 文件内的原 ID)** 共同作为题目的唯一约束标识（物理主键依然是自增的 `id`）。在更新题库或者配置批次进度时，批次范围都是通过该类目下的 `json_id` 指定确立的。请务必保证每个种类（`category`）下对应的 `json_id` 不发生重叠。
 
 > 💡 **提示**：
 > - `domain_id` 对应 `insert.sql` 中创建的领域
@@ -86,53 +96,6 @@ VALUES (1, 1, 10);  -- Java 领域第一批：题目 1-10
 #### 步骤 4：重启插件
 
 数据导入完成后，在 AstrBot 管理后台重启插件即可。
-
----
-
-### 用户基础操作
-
-#### 1️⃣ 查看可用小组和领域
-
-```
-/lgroup   # 查看所有可加入的技术小组
-/ldomain  # 查看所有可学习的技术领域
-```
-
-#### 2️⃣ 加入感兴趣的小组
-
-```
-/addme Java      # 加入 Java 小组
-/addme Golang    # 加入 Golang 小组
-/addme MySQL     # 加入 MySQL 小组
-```
-
-> 💡 加入小组后，当该小组对应领域有题目推送时，会 @ 你
-
-#### 3️⃣ 查看我的小组
-
-```
-/mygroup         # 查看已加入的所有小组
-```
-
-#### 4️⃣ 获取题目答案
-
-```
-/ans 1           # 查看题目 1 的参考答案
-/ans 42          # 查看题目 42 的参考答案
-```
-
-#### 5️⃣ 随机抽题练习
-
-```
-/rand Java       # 从 Java 领域随机抽取一道题
-/rand MySQL      # 从 MySQL 领域随机抽取一道题
-```
-
-#### 6️⃣ 退出小组
-
-```
-/rmme Java       # 退出 Java 小组
-```
 
 ---
 
@@ -153,6 +116,10 @@ VALUES (1, 1, 10);  -- Java 领域第一批：题目 1-10
 | `/prob` | 题目ID | 查看题目内容 | `/prob 1` |
 | `/search` | 关键词 | 搜索题目 | `/search Java` |
 | `/rand` | 领域名 | 随机抽取一道题 | `/rand Java` |
+| `/a` | 题目ID | 提交指定题目的回答 | `/a 1` |
+| `/h` | 题目ID | 获取指定题目的下一考点提示 | `/h 1` |
+| `/myscore` | - | 查询个人的经验值和积分 | `/myscore` |
+| `/lrank` | [领域名] | 查看本群的技术积分榜 (可指定领域) | `/lrank Java` |
 
 ### 管理员命令（仅群管理员可用）
 
@@ -165,6 +132,7 @@ VALUES (1, 1, 10);  -- Java 领域第一批：题目 1-10
 | `/task on default` | - | 使用周推送默认配置 | `/task on default` |
 | `/task off default` | - | 使用手动配置模式 | `/task off default` |
 | `/pushnow` | 领域名 | 立即触发一次推送 | `/pushnow Java` |
+| `/vans` | 题目ID 答案格式 | (管理员) 查看题目的特定答案字段 | `/vans 1 web` |
 
 ---
 
@@ -312,11 +280,11 @@ IoC(控制反转)是Spring的核心概念，将对象的创建和依赖关系的
 如果需要配置批次推送，编辑数据库中的 `domain_settings` 表：
 
 ```sql
--- Java 领域分 3 批推送
-INSERT INTO domain_settings (domain_id, start_index, end_index) VALUES
-(1, 1, 10),    -- 批次1
-(1, 11, 20),   -- 批次2
-(1, 21, 30);   -- 批次3
+-- Java 领域分批推送
+```sql
+INSERT INTO domain_settings (domain_id, category, start_index, end_index) VALUES
+(1, 'Java基础', 1, 5),     -- 批次1: json_id 1-5
+(1, '集合及并发', 1, 3);     -- 批次2: 不同的分类，json_id 从 1 开始
 ```
 
 ---
